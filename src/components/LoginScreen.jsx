@@ -60,6 +60,23 @@ export default function LoginScreen({ onLoginSuccess }) {
         </div>
       )}
 
+      {new URLSearchParams(window.location.search).get('room') && (
+        <div style={{
+          background: 'rgba(168, 85, 247, 0.1)',
+          border: '1px solid rgba(168, 85, 247, 0.3)',
+          borderRadius: '10px',
+          padding: '12px 16px',
+          marginBottom: '20px',
+          fontSize: '0.85rem',
+          color: 'var(--primary-neon-bright)',
+          lineHeight: '1.4',
+          textAlign: 'left'
+        }}>
+          💌 <strong>Room Invitation Received!</strong><br />
+          You have been invited to join a secure private room. Sign in with Google to enter instantly.
+        </div>
+      )}
+
       <button
         className="btn-primary"
         style={{ width: '100%', height: '52px', fontSize: '1.05rem' }}

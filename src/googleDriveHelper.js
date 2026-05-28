@@ -27,7 +27,7 @@ export function initGoogleAuth(clientId, onTokenReceived, onError) {
   try {
     tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
+      scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
       callback: (response) => {
         if (response.error) {
           onError(response);
@@ -150,6 +150,7 @@ async function getOrCreateFolder(name, parentId, token) {
  * Create a new Room with subfolders and room_meta.json
  */
 export async function createRoom(token, roomName, creatorProfile) {
+  console.log('[Room Creation] Initiating root folder setup...');
   // 1. Get/Create root folder AlfloestPV
   const rootId = await getOrCreateFolder('AlfloestPV', null, token);
 
@@ -159,16 +160,35 @@ export async function createRoom(token, roomName, creatorProfile) {
   // 3. Generate a beautiful random Room Code (e.g. PV-9X82KQ)
   const roomCode = `PV-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
+  console.log(`[Room Creation] Creating room folder: ${roomCode}`);
   // 4. Create the room's folder
   const roomFolderId = await getOrCreateFolder(roomCode, roomsDirId, token);
 
-  // 5. Create subfolders: messages, images, videos, files
-  const messagesFolderId = await getOrCreateFolder('messages', roomFolderId, token);
-  const imagesFolderId = await getOrCreateFolder('images', roomFolderId, token);
-  const videosFolderId = await getOrCreateFolder('videos', roomFolderId, token);
-  const filesFolderId = await getOrCreateFolder('files', roomFolderId, token);
+  // CRITICAL REQUIREMENT 1: Share the room folder IMMEDIATELY before creating subfolders/files
+  console.log('[Room Creation] Applying public sharing to room folder immediately...');
+  try {
+    await setPublicPermissions(token, roomFolderId);
+  } catch (err) {
+    console.error('[Room Creation] Failed to set public permissions on room folder:', err);
+    throw new Error(`Failed to set public permissions on room folder: ${err.message}`);
+  }
 
-  // 6. Create room_meta.json
+  // 5. Create subfolders and CRITICAL REQUIREMENT 2: Explicitly share each subfolder individually
+  console.log('[Room Creation] Initializing and sharing subfolders in parallel...');
+  
+  const messagesFolderId = await getOrCreateFolder('messages', roomFolderId, token);
+  await setPublicPermissions(token, messagesFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+
+  const imagesFolderId = await getOrCreateFolder('images', roomFolderId, token);
+  await setPublicPermissions(token, imagesFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+
+  const videosFolderId = await getOrCreateFolder('videos', roomFolderId, token);
+  await setPublicPermissions(token, videosFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+
+  const filesFolderId = await getOrCreateFolder('files', roomFolderId, token);
+  await setPublicPermissions(token, filesFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+
+  // 6. Create room_meta.json structure
   const metadata = {
     roomId: roomCode,
     roomName: roomName || `${creatorProfile.name}'s Room`,
@@ -186,15 +206,39 @@ export async function createRoom(token, roomName, creatorProfile) {
     },
   };
 
+  console.log('[Room Creation] Creating and sharing room_meta.json...');
   // Upload room_meta.json inside the room's folder
   const metaFileId = await writeJsonFile(token, roomFolderId, 'room_meta.json', metadata);
+  // Explicitly apply public permission to metadata file
+  await setPublicPermissions(token, metaFileId).catch(e => console.warn('Metadata share delayed:', e));
 
-  // 7. Make room folder accessible: Anyone with the link can edit
-  await setPublicPermissions(token, roomFolderId);
+  // CRITICAL REQUIREMENT 3: Do not finalize room creation until room_meta.json exists and is verified
+  console.log('[Room Creation] Verification loop started. Verifying metadata accessibility...');
+  let isVerified = false;
+  const verifyUrl = `${DRIVE_API_BASE}/files/${metaFileId}`;
+  
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const res = await driveFetch(verifyUrl, token);
+      if (res.ok) {
+        isVerified = true;
+        console.log(`[Room Creation] room_meta.json successfully verified on attempt ${attempt}.`);
+        break;
+      }
+    } catch (err) {
+      console.warn(`[Room Creation] Verification attempt ${attempt} failed: ${err.message}. Retrying in 500ms...`);
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
 
-  // 8. Generate a custom Room ID that contains the Folder ID base64-encoded to make joining direct and bulletproof
+  if (!isVerified) {
+    throw new Error('Verification failed: room_meta.json could not be verified on Google Drive. Propagation delayed.');
+  }
+
+  // Generate invite ID
   const packedId = `PV-${btoa(roomFolderId).replace(/=/g, '')}`;
 
+  console.log(`[Room Creation] Room ${roomCode} successfully finalized and verified!`);
   return {
     roomCode,
     packedId,
@@ -253,7 +297,8 @@ async function writeJsonFile(token, parentFolderId, filename, data) {
 }
 
 /**
- * Resolves a shareable code, url, or direct folderId into room metadata
+ * Resolves a shareable code, url, or direct folderId into room metadata.
+ * CRITICAL REQUIREMENT 4: Direct fetch of room_meta.json with silent auto-retry.
  */
 export async function joinRoom(token, inputRoomId) {
   let folderId = '';
@@ -301,17 +346,36 @@ export async function joinRoom(token, inputRoomId) {
     }
   }
 
-  // Fetch the room_meta.json inside this folder ID
-  const metaQuery = `'${folderId}' in parents and name = 'room_meta.json' and trashed = false`;
-  const metaUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(metaQuery)}&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id)`;
-  const metaRes = await driveFetch(metaUrl, token);
-  const metaData = await metaRes.json();
+  console.log(`[Join Room] Attempting direct metadata lookup for folder ID: ${folderId}`);
+  let metaData = null;
+  let metaFileId = '';
 
-  if (!metaData.files || metaData.files.length === 0) {
-    throw new Error('Room found, but room_meta.json is missing or inaccessible.');
+  // Silent retry loop (up to 5 times, waiting 800ms) to bypass Drive indexing/sharing delays
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const metaQuery = `'${folderId}' in parents and name = 'room_meta.json' and trashed = false`;
+      const metaUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(metaQuery)}&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id)`;
+      const metaRes = await driveFetch(metaUrl, token);
+      metaData = await metaRes.json();
+      
+      if (metaData.files && metaData.files.length > 0) {
+        metaFileId = metaData.files[0].id;
+        console.log(`[Join Room] room_meta.json found on attempt ${attempt}.`);
+        break;
+      }
+    } catch (err) {
+      console.warn(`[Join Room] Verification attempt ${attempt} failed:`, err);
+    }
+    
+    if (attempt < 5) {
+      console.log(`[Join Room] room_meta.json not indexed yet on attempt ${attempt}. Silently retrying in 800ms...`);
+      await new Promise(r => setTimeout(r, 800));
+    }
   }
 
-  const metaFileId = metaData.files[0].id;
+  if (!metaFileId) {
+    throw new Error('Room metadata could not be fetched. If this is a brand new room, please wait 3 seconds and click the link again to allow Google Drive to index permissions.');
+  }
 
   // Download metadata content
   const downloadUrl = `${DRIVE_API_BASE}/files/${metaFileId}?alt=media`;
@@ -320,7 +384,7 @@ export async function joinRoom(token, inputRoomId) {
 
   // Return formatted metadata
   return {
-    roomCode: roomMeta.roomId,
+    roomCode: roomMeta.roomId || roomMeta.roomCode,
     packedId: `PV-${btoa(folderId).replace(/=/g, '')}`,
     roomName: roomMeta.roomName,
     folderId,

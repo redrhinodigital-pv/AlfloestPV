@@ -58,7 +58,7 @@ export default function Sidebar({
   };
 
   const handleCopyLink = () => {
-    const inviteUrl = `${window.location.origin}/?room=${roomDetails.folderId}`;
+    const inviteUrl = `https://alfloest-pv.vercel.app/?room=${roomDetails.folderId}`;
     navigator.clipboard.writeText(inviteUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
