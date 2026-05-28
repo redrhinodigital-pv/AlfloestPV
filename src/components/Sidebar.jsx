@@ -52,7 +52,7 @@ export default function Sidebar({
   };
 
   const handleCopyId = () => {
-    navigator.clipboard.writeText(roomDetails.packedId);
+    navigator.clipboard.writeText(roomDetails.folderId);
     setCopiedId(true);
     setTimeout(() => setCopiedId(false), 2000);
   };
@@ -83,8 +83,10 @@ export default function Sidebar({
         </div>
 
         <button className="sidebar-room-code-badge" onClick={handleCopyId}>
-          <span>Code: {roomDetails.roomCode}</span>
-          <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+          <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '140px' }}>
+            ID: {roomDetails.folderId}
+          </span>
+          <span style={{ fontSize: '0.75rem', opacity: 0.8, minWidth: '40px', textAlign: 'right' }}>
             {copiedId ? 'Copied ✓' : 'Copy'}
           </span>
         </button>

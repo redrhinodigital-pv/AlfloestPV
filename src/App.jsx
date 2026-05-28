@@ -41,6 +41,7 @@ export default function App() {
 
   const [activeRoom, setActiveRoom] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState(null);
   const [globalError, setGlobalError] = useState(null);
 
   // Modals state
@@ -124,7 +125,10 @@ export default function App() {
       const urlRoomId = params.get('room');
       if (urlRoomId && !activeRoom) {
         setIsLoading(true);
-        joinRoom(authState.accessToken, urlRoomId)
+        setLoadingStatus('Connecting to secure room... Syncing with cloud nodes (Attempt 1/10)...');
+        joinRoom(authState.accessToken, urlRoomId, (attempt) => {
+          setLoadingStatus(`Connecting to secure room... Syncing with cloud nodes (Attempt ${attempt}/10)...`);
+        })
           .then((roomData) => {
             handleJoinSuccess(roomData);
             // Clear URL param to keep address bar clean
@@ -136,6 +140,7 @@ export default function App() {
           })
           .finally(() => {
             setIsLoading(false);
+            setLoadingStatus(null);
           });
       }
     }
@@ -174,6 +179,7 @@ export default function App() {
     if (!authState?.accessToken || !userProfile) return;
 
     setIsLoading(true);
+    setLoadingStatus('Creating room structures & configuring secure permissions on Google Drive...');
     try {
       const room = await createRoom(authState.accessToken, roomName, userProfile);
       handleJoinSuccess(room, true);
@@ -182,6 +188,7 @@ export default function App() {
       throw err;
     } finally {
       setIsLoading(false);
+      setLoadingStatus(null);
     }
   };
 
@@ -189,14 +196,18 @@ export default function App() {
     if (!authState?.accessToken) return;
 
     setIsLoading(true);
+    setLoadingStatus('Connecting to secure room... Syncing with cloud nodes (Attempt 1/10)...');
     try {
-      const room = await joinRoom(authState.accessToken, roomIdInput);
+      const room = await joinRoom(authState.accessToken, roomIdInput, (attempt) => {
+        setLoadingStatus(`Connecting to secure room... Syncing with cloud nodes (Attempt ${attempt}/10)...`);
+      });
       handleJoinSuccess(room, false);
     } catch (err) {
       console.error(err);
       throw err;
     } finally {
       setIsLoading(false);
+      setLoadingStatus(null);
     }
   };
 
@@ -233,7 +244,10 @@ export default function App() {
   const handleRejoinRoom = (historyItem) => {
     setIsLoading(true);
     setGlobalError(null);
-    joinRoom(authState.accessToken, historyItem.folderId)
+    setLoadingStatus('Connecting to secure room... Syncing with cloud nodes (Attempt 1/10)...');
+    joinRoom(authState.accessToken, historyItem.folderId, (attempt) => {
+      setLoadingStatus(`Connecting to secure room... Syncing with cloud nodes (Attempt ${attempt}/10)...`);
+    })
       .then((roomData) => {
         handleJoinSuccess(roomData, historyItem.isCreator);
       })
@@ -247,6 +261,7 @@ export default function App() {
       })
       .finally(() => {
         setIsLoading(false);
+        setLoadingStatus(null);
       });
   };
 
@@ -271,8 +286,8 @@ export default function App() {
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: '1.25rem', letterSpacing: '-0.01em' }}>
               Alfloest PV Cloud
             </div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '6px' }}>
-              Communicating with secure Google Drive nodes...
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '6px', maxWidth: '320px', margin: '6px auto 0' }}>
+              {loadingStatus || 'Communicating with secure Google Drive nodes...'}
             </div>
           </div>
         </div>

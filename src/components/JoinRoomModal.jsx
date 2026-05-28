@@ -34,7 +34,7 @@ export default function JoinRoomModal({ isOpen, onClose, onJoinRoom }) {
       <div className="modal-content glass-panel">
         <h2 className="modal-header">Join PV Room</h2>
         <p className="modal-desc">
-          Paste the Room ID, packed code (starts with <code>PV-</code>), or the complete Share Invite Link that the room host sent you.
+          Paste the Room Folder ID or the complete Share Invite Link that the room host sent you.
         </p>
 
         {error && (
@@ -54,13 +54,13 @@ export default function JoinRoomModal({ isOpen, onClose, onJoinRoom }) {
         <form onSubmit={handleSubmit}>
           <div className="input-group">
             <label className="input-label" htmlFor="roomIdInput">
-              Room ID or Invite Link
+              Room Folder ID or Invite Link
             </label>
             <input
               type="text"
               id="roomIdInput"
               className="input-field"
-              placeholder="e.g. PV-dHJvdXNsZWxlc3Nra... or URL"
+              placeholder="e.g. 1a2b3c4d5e6f7g8h... or URL"
               value={roomId}
               onChange={(e) => setRoomId(e.target.value)}
               disabled={isJoining}
