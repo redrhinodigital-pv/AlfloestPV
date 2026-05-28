@@ -184,35 +184,43 @@ export async function createRoom(token, roomName, creatorProfile) {
   
   // 3. Create the room's folder directly to guarantee a unique folder ID
   const roomFolderId = await createFolderDirectly(cleanRoomName, roomsDirId, token);
+  console.log(`[Room Creation] Created Room Folder ID: ${roomFolderId}`);
 
   // CRITICAL REQUIREMENT 1: Share the room folder IMMEDIATELY before creating subfolders/files
-  console.log('[Room Creation] Applying public sharing to room folder immediately...');
+  console.log('[Room Creation] Applying public sharing (type: anyone, role: writer) to room folder immediately...');
   try {
-    await setPublicPermissions(token, roomFolderId);
+    const permResult = await setPublicPermissions(token, roomFolderId);
+    console.log('[Room Creation] Room folder permission creation result:', permResult);
   } catch (err) {
-    console.error('[Room Creation] Failed to set public permissions on room folder:', err);
+    console.error('[Room Creation] CRITICAL: Failed to set public permissions on room folder:', err);
     throw new Error(`Failed to set public permissions on room folder: ${err.message}`);
   }
 
-  // 4. Create subfolders and CRITICAL REQUIREMENT 2: Explicitly share each subfolder individually
-  console.log('[Room Creation] Initializing and sharing subfolders...');
-  
+  // 4. Create subfolders and FORCE public file access sequentially
+  console.log('[Room Creation] Creating and sharing messages subfolder...');
   const messagesFolderId = await createFolderDirectly('messages', roomFolderId, token);
-  await setPublicPermissions(token, messagesFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+  const messagesPerm = await setPublicPermissions(token, messagesFolderId);
+  console.log('[Room Creation] Messages folder permission result:', messagesPerm);
 
+  console.log('[Room Creation] Creating and sharing images subfolder...');
   const imagesFolderId = await createFolderDirectly('images', roomFolderId, token);
-  await setPublicPermissions(token, imagesFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+  const imagesPerm = await setPublicPermissions(token, imagesFolderId);
+  console.log('[Room Creation] Images folder permission result:', imagesPerm);
 
+  console.log('[Room Creation] Creating and sharing videos subfolder...');
   const videosFolderId = await createFolderDirectly('videos', roomFolderId, token);
-  await setPublicPermissions(token, videosFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+  const videosPerm = await setPublicPermissions(token, videosFolderId);
+  console.log('[Room Creation] Videos folder permission result:', videosPerm);
 
+  console.log('[Room Creation] Creating and sharing files subfolder...');
   const filesFolderId = await createFolderDirectly('files', roomFolderId, token);
-  await setPublicPermissions(token, filesFolderId).catch(e => console.warn('Subfolder share delayed:', e));
+  const filesPerm = await setPublicPermissions(token, filesFolderId);
+  console.log('[Room Creation] Files folder permission result:', filesPerm);
 
   // 5. Create room_meta.json structure
   const metadata = {
     roomId: roomFolderId, // Use raw folder ID as room ID strictly!
-    roomCode: roomFolderId, // Omit packed code, use raw folder ID for displays
+    roomFolderId: roomFolderId, // Strictly raw folder ID
     roomName: cleanRoomName,
     creator: {
       name: creatorProfile.name,
@@ -228,11 +236,13 @@ export async function createRoom(token, roomName, creatorProfile) {
     },
   };
 
-  console.log('[Room Creation] Creating and sharing room_meta.json...');
+  console.log('[Room Creation] Creating room_meta.json...');
   // Upload room_meta.json inside the room's folder
   const metaFileId = await writeJsonFile(token, roomFolderId, 'room_meta.json', metadata);
-  // Explicitly apply public permission to metadata file
-  await setPublicPermissions(token, metaFileId).catch(e => console.warn('Metadata share delayed:', e));
+  
+  console.log('[Room Creation] Sharing room_meta.json...');
+  const metaPerm = await setPublicPermissions(token, metaFileId);
+  console.log('[Room Creation] Metadata file permission result:', metaPerm);
 
   // CRITICAL REQUIREMENT 3: Do not finalize room creation until room_meta.json exists, permissions are verified, and test fetch passes
   console.log('[Room Creation] Final verification loop started. Verifying metadata accessibility & permissions...');
@@ -243,6 +253,7 @@ export async function createRoom(token, roomName, creatorProfile) {
       // Test 1: Verify file exists and is accessible
       const verifyUrl = `${DRIVE_API_BASE}/files/${metaFileId}`;
       const res = await driveFetch(verifyUrl, token);
+      console.log(`[Room Creation] Verification Attempt ${attempt} metadata fetch status:`, res.status);
       
       if (res.ok) {
         // Test 2: Programmatically verify public permissions are active (type: anyone, role: writer)
@@ -260,14 +271,14 @@ export async function createRoom(token, roomName, creatorProfile) {
         const downloadUrl = `${DRIVE_API_BASE}/files/${metaFileId}?alt=media`;
         const downloadRes = await driveFetch(downloadUrl, token);
         const testMeta = await downloadRes.json();
-        const contentValid = testMeta.roomId === roomFolderId && testMeta.folderIds?.messages;
+        const contentValid = testMeta.roomFolderId === roomFolderId && testMeta.folderIds?.messages;
+
+        console.log(`[Room Creation] Verification Attempt ${attempt} results: FolderShared=${folderShared}, MetaShared=${metaShared}, ContentValid=${contentValid}`);
 
         if (folderShared && metaShared && contentValid) {
           isVerified = true;
-          console.log(`[Room Creation] room_meta.json, permissions, and guest-fetch simulation successfully verified on attempt ${attempt}.`);
+          console.log(`[Room Creation] SUCCESS: room_meta.json, permissions, and guest-fetch simulation successfully verified on attempt ${attempt}.`);
           break;
-        } else {
-          console.warn(`[Room Creation] Attempt ${attempt} succeeded file check but validation is still propagating: FolderShared=${folderShared}, MetaShared=${metaShared}, ContentValid=${contentValid}`);
         }
       }
     } catch (err) {
@@ -277,16 +288,15 @@ export async function createRoom(token, roomName, creatorProfile) {
   }
 
   if (!isVerified) {
-    throw new Error('Verification failed: public permissions or metadata could not be fully verified on Google Drive.');
+    throw new Error('Room creation verification failed: public permissions or metadata could not be fully verified on Google Drive.');
   }
 
   console.log(`[Room Creation] Room folder ${roomFolderId} successfully finalized and verified!`);
   return {
-    roomCode: roomFolderId,
-    packedId: roomFolderId, // ONLY use raw folder ID (no packed base64)
+    roomFolderId,
     roomName: metadata.roomName,
-    folderId: roomFolderId,
     folderIds: metadata.folderIds,
+    creator: metadata.creator,
   };
 }
 
@@ -301,11 +311,12 @@ async function setPublicPermissions(token, fileId) {
     allowFileDiscovery: false,
   };
 
-  await driveFetch(url, token, {
+  const res = await driveFetch(url, token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  return await res.json();
 }
 
 /**
@@ -343,9 +354,10 @@ async function writeJsonFile(token, parentFolderId, filename, data) {
  * CRITICAL REQUIREMENT: Direct fetch with 10 silent auto-retries and 1s delays.
  */
 export async function joinRoom(token, inputRoomId, onAttempt) {
-  let folderId = '';
+  let roomFolderId = '';
 
   const cleanInput = inputRoomId.trim();
+  console.log(`[Join Room] Input string: ${cleanInput}`);
 
   // Case 1: Pasted an invite URL or contains '?room=' (extract raw folder ID)
   if (cleanInput.includes('http://') || cleanInput.includes('https://') || cleanInput.includes('?room=')) {
@@ -359,7 +371,8 @@ export async function joinRoom(token, inputRoomId, onAttempt) {
       const url = new URL(urlStr);
       const roomParam = url.searchParams.get('room');
       if (roomParam) {
-        folderId = roomParam;
+        roomFolderId = roomParam;
+        console.log(`[Join Room] Extracted roomFolderId from URL parameter: ${roomFolderId}`);
       }
     } catch (err) {
       console.warn('[Join Room] Failed to parse invite URL:', err);
@@ -367,12 +380,11 @@ export async function joinRoom(token, inputRoomId, onAttempt) {
   }
 
   // Case 2: Direct raw Google Drive folder ID
-  if (!folderId) {
-    folderId = cleanInput;
+  if (!roomFolderId) {
+    roomFolderId = cleanInput;
   }
 
-  console.log(`[Join Room] Initiating metadata lookup for folder ID: ${folderId}`);
-  let metaData = null;
+  console.log(`[Join Room] Initiating metadata lookup for roomFolderId: ${roomFolderId}`);
   let metaFileId = '';
 
   // Silent retry loop (up to 10 attempts, 1-second delay between attempts)
@@ -384,22 +396,30 @@ export async function joinRoom(token, inputRoomId, onAttempt) {
     }
 
     try {
-      const metaQuery = `'${folderId}' in parents and name = 'room_meta.json' and trashed = false`;
-      const metaUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(metaQuery)}&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id)`;
-      const metaRes = await driveFetch(metaUrl, token);
-      metaData = await metaRes.json();
+      // DIRECT CONTENT ACCESS: List all children of roomFolderId (no searching by name index query)
+      const listQuery = `'${roomFolderId}' in parents and trashed = false`;
+      const listUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(listQuery)}&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)`;
       
-      if (metaData.files && metaData.files.length > 0) {
-        metaFileId = metaData.files[0].id;
-        console.log(`[Join Room] room_meta.json resolved on attempt ${attempt}.`);
+      console.log(`[Join Room] Attempt ${attempt} Drive API Query URL: ${listUrl}`);
+      const listRes = await driveFetch(listUrl, token);
+      console.log(`[Join Room] Attempt ${attempt} query response status:`, listRes.status);
+      
+      const listData = await listRes.json();
+      console.log(`[Join Room] Attempt ${attempt} files found in parent:`, listData.files || []);
+
+      // Find room_meta.json in Javascript memory! Bypasses name lookup delay.
+      const metaFile = listData.files?.find(f => f.name === 'room_meta.json');
+      if (metaFile) {
+        metaFileId = metaFile.id;
+        console.log(`[Join Room] SUCCESS: room_meta.json resolved to File ID: ${metaFileId}`);
         break;
       }
     } catch (err) {
-      console.warn(`[Join Room] Attempt ${attempt} failed to find metadata:`, err);
+      console.warn(`[Join Room] Attempt ${attempt} failed to query Drive:`, err);
     }
     
     if (attempt < 10) {
-      console.log(`[Join Room] room_meta.json not resolved on attempt ${attempt}. Retrying in 1000ms...`);
+      console.log(`[Join Room] Retrying contents query in 1000ms...`);
       await new Promise(r => setTimeout(r, 1000));
     }
   }
@@ -410,15 +430,15 @@ export async function joinRoom(token, inputRoomId, onAttempt) {
 
   // Download metadata content
   const downloadUrl = `${DRIVE_API_BASE}/files/${metaFileId}?alt=media`;
+  console.log(`[Join Room] Fetching metadata contents from: ${downloadUrl}`);
   const contentRes = await driveFetch(downloadUrl, token);
   const roomMeta = await contentRes.json();
+  console.log(`[Join Room] Parsed room_meta.json successfully:`, roomMeta);
 
-  // Return formatted metadata
+  // Return formatted metadata using STRICTLY roomFolderId
   return {
-    roomCode: folderId, // STRICT: Only raw folder ID
-    packedId: folderId, // STRICT: Only raw folder ID
+    roomFolderId: roomFolderId, // ONLY use raw folder ID
     roomName: roomMeta.roomName,
-    folderId,
     folderIds: roomMeta.folderIds,
     creator: roomMeta.creator,
   };

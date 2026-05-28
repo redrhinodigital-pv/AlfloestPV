@@ -52,13 +52,13 @@ export default function Sidebar({
   };
 
   const handleCopyId = () => {
-    navigator.clipboard.writeText(roomDetails.folderId);
+    navigator.clipboard.writeText(roomDetails.roomFolderId);
     setCopiedId(true);
     setTimeout(() => setCopiedId(false), 2000);
   };
 
   const handleCopyLink = () => {
-    const inviteUrl = `https://alfloest-pv.vercel.app/?room=${roomDetails.folderId}`;
+    const inviteUrl = `https://alfloest-pv.vercel.app/?room=${roomDetails.roomFolderId}`;
     navigator.clipboard.writeText(inviteUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
@@ -84,7 +84,7 @@ export default function Sidebar({
 
         <button className="sidebar-room-code-badge" onClick={handleCopyId}>
           <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '140px' }}>
-            ID: {roomDetails.folderId}
+            ID: {roomDetails.roomFolderId}
           </span>
           <span style={{ fontSize: '0.75rem', opacity: 0.8, minWidth: '40px', textAlign: 'right' }}>
             {copiedId ? 'Copied ✓' : 'Copy'}

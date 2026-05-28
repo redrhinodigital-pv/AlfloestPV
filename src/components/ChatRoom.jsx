@@ -51,7 +51,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
     let active = true;
     async function loadLocalCache() {
       try {
-        const cached = await getCachedMessages(roomDetails.folderId);
+        const cached = await getCachedMessages(roomDetails.roomFolderId);
         if (active && cached.length > 0) {
           cached.forEach((msg) => {
             if (msg.gdriveFileId) {
@@ -111,7 +111,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
           }
 
           // Cache new messages in IndexedDB local database
-          await cacheMessages(roomDetails.folderId, newMsgs);
+          await cacheMessages(roomDetails.roomFolderId, newMsgs);
 
           // Scroll settings
           const scroller = scrollerRef.current;
@@ -138,7 +138,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
         // Poll serverless presence signaling files
         const { onlineUsers, typingUsers: activeTypers } = await listLiveStatuses(
           token,
-          roomDetails.folderId
+          roomDetails.roomFolderId
         );
 
         if (active) {
@@ -179,7 +179,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
       try {
         const fileId = await updatePresenceStatus(
           token,
-          roomDetails.folderId,
+          roomDetails.roomFolderId,
           userProfile.email,
           userProfile.name,
           'online',
@@ -214,7 +214,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
       lastTypingTime.current = now;
       updatePresenceStatus(
         token,
-        roomDetails.folderId,
+        roomDetails.roomFolderId,
         userProfile.email,
         userProfile.name,
         'typing',
@@ -297,7 +297,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
         }
 
         // Cache locally
-        await cacheMessages(roomDetails.folderId, newMsgs);
+        await cacheMessages(roomDetails.roomFolderId, newMsgs);
 
         setMessages((prev) => {
           const filtered = prev.filter(m => !m.sending);

@@ -215,18 +215,26 @@ export default function App() {
     setActiveRoom(roomData);
 
     // Save/Update room in recent history list in localStorage
-    const history = JSON.parse(localStorage.getItem('alfloest_room_history') || '[]');
+    const rawHistory = JSON.parse(localStorage.getItem('alfloest_room_history') || '[]');
     
+    // Normalize and migrate old format history
+    const history = rawHistory.map(item => {
+      const mappedId = item.roomFolderId || item.folderId || item.packedId;
+      return {
+        ...item,
+        roomFolderId: mappedId,
+        folderId: mappedId,
+      };
+    });
+
     // Check if room already in history
-    const existingIndex = history.findIndex((r) => r.folderId === roomData.folderId);
+    const existingIndex = history.findIndex((r) => r.roomFolderId === roomData.roomFolderId);
     
     const isCreator = existingIndex > -1 ? history[existingIndex].isCreator : isCreatorInput;
 
     const historyItem = {
-      roomCode: roomData.roomCode,
-      packedId: roomData.packedId,
+      roomFolderId: roomData.roomFolderId,
       roomName: roomData.roomName,
-      folderId: roomData.folderId,
       folderIds: roomData.folderIds,
       isCreator,
       lastVisited: Date.now(),
@@ -245,7 +253,7 @@ export default function App() {
     setIsLoading(true);
     setGlobalError(null);
     setLoadingStatus('Connecting to secure room... Syncing with cloud nodes (Attempt 1/10)...');
-    joinRoom(authState.accessToken, historyItem.folderId, (attempt) => {
+    joinRoom(authState.accessToken, historyItem.roomFolderId, (attempt) => {
       setLoadingStatus(`Connecting to secure room... Syncing with cloud nodes (Attempt ${attempt}/10)...`);
     })
       .then((roomData) => {
@@ -255,8 +263,11 @@ export default function App() {
         console.error('Rejoin room failed:', err);
         setGlobalError(`Rejoining room failed: ${err.message}. It may have been deleted by the host.`);
         // Remove from history if it is missing
-        const history = JSON.parse(localStorage.getItem('alfloest_room_history') || '[]');
-        const filtered = history.filter((r) => r.folderId !== historyItem.folderId);
+        const rawHistory = JSON.parse(localStorage.getItem('alfloest_room_history') || '[]');
+        const filtered = rawHistory.filter((r) => {
+          const mappedId = r.roomFolderId || r.folderId || r.packedId;
+          return mappedId !== historyItem.roomFolderId;
+        });
         localStorage.setItem('alfloest_room_history', JSON.stringify(filtered));
       })
       .finally(() => {

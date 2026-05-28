@@ -10,7 +10,16 @@ export default function Dashboard({
   const [roomHistory, setRoomHistory] = useState([]);
 
   useEffect(() => {
-    const history = JSON.parse(localStorage.getItem('alfloest_room_history') || '[]');
+    const rawHistory = JSON.parse(localStorage.getItem('alfloest_room_history') || '[]');
+    // Normalize and migrate old schema items to roomFolderId
+    const history = rawHistory.map(item => {
+      const roomFolderId = item.roomFolderId || item.folderId || item.packedId;
+      return {
+        ...item,
+        roomFolderId,
+        folderId: roomFolderId,
+      };
+    });
     // Sort by last visited timestamp (descending)
     history.sort((a, b) => b.lastVisited - a.lastVisited);
     setRoomHistory(history);
@@ -91,13 +100,15 @@ export default function Dashboard({
           {roomHistory.length > 0 ? (
             roomHistory.map((room) => (
               <div
-                key={room.folderId}
+                key={room.roomFolderId}
                 className="history-item"
                 onClick={() => onRejoinRoom(room)}
               >
                 <div className="history-item-details">
                   <div className="history-room-name">{room.roomName}</div>
-                  <div className="history-room-code">{room.roomCode}</div>
+                  <div className="history-room-code" style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '280px' }}>
+                    ID: {room.roomFolderId}
+                  </div>
                 </div>
                 <div className="history-item-meta">
                   <span className={`history-badge ${room.isCreator ? 'badge-creator' : 'badge-joiner'}`}>

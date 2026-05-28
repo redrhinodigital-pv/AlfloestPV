@@ -34,7 +34,7 @@ export default function JoinRoomModal({ isOpen, onClose, onJoinRoom }) {
       <div className="modal-content glass-panel">
         <h2 className="modal-header">Join PV Room</h2>
         <p className="modal-desc">
-          Paste the Room Folder ID or the complete Share Invite Link that the room host sent you.
+          Paste the Room ID or the complete Share Invite Link that the room host sent you.
         </p>
 
         {error && (
@@ -54,7 +54,7 @@ export default function JoinRoomModal({ isOpen, onClose, onJoinRoom }) {
         <form onSubmit={handleSubmit}>
           <div className="input-group">
             <label className="input-label" htmlFor="roomIdInput">
-              Room Folder ID or Invite Link
+              Room ID or Invite Link
             </label>
             <input
               type="text"
