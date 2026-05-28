@@ -11,15 +11,13 @@ import {
   joinRoom,
   initGoogleAuth,
   loginSilentlyWithGoogle,
+  loginWithGoogle,
 } from './googleDriveHelper';
 
-const DEFAULT_CLIENT_ID = '953186837803-qfbe987178lhvmo3d23rm8t7tvd652m8.apps.googleusercontent.com';
+// ONE hardcoded global CLIENT_ID for the entire application
+const CLIENT_ID = '953186837803-qfbe987178lhvmo3d23rm8t7tvd652m8.apps.googleusercontent.com';
 
 export default function App() {
-  const [clientId] = useState(() => {
-    return localStorage.getItem('alfloest_client_id') || DEFAULT_CLIENT_ID;
-  });
-
   const [authState, setAuthState] = useState(() => {
     // Try to load cached token if still valid
     const cachedToken = localStorage.getItem('alfloest_token');
@@ -58,7 +56,7 @@ export default function App() {
 
       if (window.google?.accounts?.oauth2) {
         initGoogleAuth(
-          clientId,
+          CLIENT_ID,
           (authData) => {
             if (!active) return;
             handleLoginSuccess(authData);
@@ -67,7 +65,7 @@ export default function App() {
             if (!active) return;
             console.error('GIS Error:', err);
             setIsLoading(false);
-            // If silent login fails (profile expired/revoked), clear logged in flag
+            // If silent login fails, clear logged in flag
             localStorage.removeItem('alfloest_logged_in');
           }
         );
@@ -96,7 +94,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [clientId]);
+  }, []);
 
   // Load profile when authState changes
   useEffect(() => {
@@ -142,6 +140,17 @@ export default function App() {
       }
     }
   }, [authState, userProfile, activeRoom]);
+
+  const handleLoginClick = () => {
+    setIsLoading(true);
+    setGlobalError(null);
+    try {
+      loginWithGoogle();
+    } catch (err) {
+      setIsLoading(false);
+      setGlobalError(err.message || 'Auth flow failed to launch. Ensure Google script is loaded.');
+    }
+  };
 
   const handleLoginSuccess = (authData) => {
     setAuthState(authData);
@@ -222,7 +231,6 @@ export default function App() {
   };
 
   const handleRejoinRoom = (historyItem) => {
-    // History item contains pre-saved folderIds, but let's re-verify it's valid
     setIsLoading(true);
     setGlobalError(null);
     joinRoom(authState.accessToken, historyItem.folderId)
@@ -312,7 +320,11 @@ export default function App() {
 
       {/* View Coordinator Router */}
       {!authState?.accessToken ? (
-        <LoginScreen onLoginSuccess={handleLoginSuccess} />
+        <LoginScreen
+          handleLoginClick={handleLoginClick}
+          isLoading={isLoading}
+          error={globalError}
+        />
       ) : activeRoom ? (
         <ChatRoom
           roomDetails={activeRoom}
