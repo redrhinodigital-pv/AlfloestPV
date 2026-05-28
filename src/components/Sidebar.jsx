@@ -6,6 +6,7 @@ export default function Sidebar({
   userProfile,
   onExitRoom,
   isOpenMobile,
+  onlineParticipants = [],
 }) {
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -63,6 +64,12 @@ export default function Sidebar({
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
+  const checkIsOnline = (email) => {
+    if (email === userProfile.email) return true;
+    const cleanEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
+    return onlineParticipants.some((op) => op.email === cleanEmail);
+  };
+
   const participants = getParticipants();
 
   return (
@@ -86,40 +93,59 @@ export default function Sidebar({
       <div className="sidebar-scroll-area">
         <div className="sidebar-section-title">Participants ({participants.length})</div>
         <div className="participant-list">
-          {participants.map((person) => (
-            <div key={person.email} className="participant-item">
-              {person.picture ? (
-                <img
-                  src={person.picture}
-                  alt={person.name}
-                  className="participant-avatar"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div
-                  className="participant-avatar"
-                  style={{
-                    background: person.isCreator ? 'var(--primary-neon)' : 'var(--accent-pink)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.8rem',
-                    fontWeight: 'bold',
-                  }}
-                >
-                  {person.name.charAt(0).toUpperCase()}
+          {participants.map((person) => {
+            const isOnline = checkIsOnline(person.email);
+            return (
+              <div key={person.email} className="participant-item">
+                <div style={{ position: 'relative', display: 'flex' }}>
+                  {person.picture ? (
+                    <img
+                      src={person.picture}
+                      alt={person.name}
+                      className="participant-avatar"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div
+                      className="participant-avatar"
+                      style={{
+                        background: person.isCreator ? 'var(--primary-neon)' : 'var(--accent-pink)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '0.8rem',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      {person.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  {/* Presence indicator dot */}
+                  <span
+                    style={{
+                      position: 'absolute',
+                      bottom: '0',
+                      right: '0',
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '50%',
+                      background: isOnline ? '#22c55e' : '#71717a',
+                      border: '2px solid rgba(14, 8, 26, 0.95)',
+                    }}
+                    title={isOnline ? 'Online' : 'Offline'}
+                  />
                 </div>
-              )}
-              <div className="participant-info">
-                <div className="participant-name">
-                  {person.name} {person.email === userProfile.email && '(You)'}
-                </div>
-                <div className="participant-badge">
-                  {person.isCreator ? 'Host' : 'Guest'}
+                <div className="participant-info">
+                  <div className="participant-name">
+                    {person.name} {person.email === userProfile.email && '(You)'}
+                  </div>
+                  <div className="participant-badge">
+                    {person.isCreator ? 'Host' : 'Guest'}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

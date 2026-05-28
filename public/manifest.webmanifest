@@ -1,0 +1,24 @@
+{
+  "name": "Alfloest PV Chat",
+  "short_name": "AlfloestPV",
+  "description": "Serverless, private Google Drive backed secure chat app.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090611",
+  "theme_color": "#a855f7",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ]
+}

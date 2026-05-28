@@ -445,11 +445,16 @@ export async function uploadMediaMessage(token, messagesFolderId, sender, mediaT
   return await writeJsonFile(token, messagesFolderId, filename, messagePayload);
 }
 
+
 /**
- * List message files inside the messages folder and return parsed messages
+ * List message files inside the messages folder and return parsed messages.
+ * Includes optional lastMessageName to execute lexicographical delta syncing.
  */
-export async function listMessages(token, messagesFolderId, existingMessageIds = new Set()) {
-  const query = `'${messagesFolderId}' in parents and trashed = false`;
+export async function listMessages(token, messagesFolderId, existingMessageIds = new Set(), lastMessageName = null) {
+  let query = `'${messagesFolderId}' in parents and trashed = false`;
+  if (lastMessageName) {
+    query += ` and name > '${lastMessageName}'`;
+  }
   // Order by name so they sort naturally by the prefix timestamp
   const listUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&orderBy=name&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)`;
   
@@ -473,6 +478,7 @@ export async function listMessages(token, messagesFolderId, existingMessageIds =
       const msg = await res.json();
       // Inject the Google Drive File ID representing this message JSON
       msg.gdriveFileId = file.id;
+      msg.gdriveFileName = file.name;
       return msg;
     } catch (err) {
       console.error(`Error downloading message file ${file.name}:`, err);
@@ -499,4 +505,116 @@ export async function downloadFileAsBlobUrl(token, fileId) {
   const res = await driveFetch(url, token);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
+}
+
+/**
+ * Update (create or rename) the user's online or typing status file inside the room folder.
+ * Uses file renaming (metadata update) for 0-byte instantaneous signaling.
+ */
+export async function updatePresenceStatus(token, roomFolderId, email, name, statusType, currentFileId) {
+  const cleanEmail = email.replace(/[^a-zA-Z0-9]/g, '_');
+  const cleanName = encodeURIComponent(name.replace(/_/g, ' '));
+  const newName = `status_${statusType}_${cleanEmail}_${cleanName}_${Date.now()}.json`;
+
+  if (currentFileId) {
+    // Overwrite/Update filename of existing file by ID
+    const url = `${DRIVE_API_BASE}/files/${currentFileId}`;
+    try {
+      const res = await driveFetch(url, token, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      });
+      const data = await res.json();
+      return data.id;
+    } catch (err) {
+      console.error(`Failed to rename status file ${currentFileId}:`, err);
+      // Fallback: create a new one
+    }
+  }
+
+  // Find if a file for this user and statusType already exists in this folder
+  const query = `'${roomFolderId}' in parents and name contains 'status_${statusType}_${cleanEmail}_' and trashed = false`;
+  const listUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&fields=files(id)`;
+  const listRes = await driveFetch(listUrl, token);
+  const listData = await listRes.json();
+
+  if (listData.files && listData.files.length > 0) {
+    const existingId = listData.files[0].id;
+    // Rename existing
+    const patchUrl = `${DRIVE_API_BASE}/files/${existingId}`;
+    const patchRes = await driveFetch(patchUrl, token, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    const patchData = await patchRes.json();
+    return patchData.id;
+  }
+
+  // Create a new 0-byte file
+  const createUrl = `${DRIVE_API_BASE}/files`;
+  const createBody = {
+    name: newName,
+    parents: [roomFolderId],
+    mimeType: 'application/json',
+  };
+
+  const createRes = await driveFetch(createUrl, token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(createBody),
+  });
+  const createData = await createRes.json();
+  return createData.id;
+}
+
+/**
+ * List all live status files inside the room folder and parse online/typing user details.
+ */
+export async function listLiveStatuses(token, roomFolderId) {
+  const query = `'${roomFolderId}' in parents and name contains 'status_' and trashed = false`;
+  const listUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)`;
+  
+  try {
+    const listRes = await driveFetch(listUrl, token);
+    const listData = await listRes.json();
+
+    const onlineUsers = [];
+    const typingUsers = [];
+    const now = Date.now();
+
+    if (listData.files) {
+      listData.files.forEach((file) => {
+        // Format: status_[statusType]_[cleanEmail]_[cleanName]_[timestamp].json
+        const parts = file.name.split('_');
+        if (parts.length >= 5 && parts[0] === 'status') {
+          const type = parts[1]; // 'online' or 'typing'
+          const cleanEmail = parts[2];
+          const cleanName = decodeURIComponent(parts[3]);
+          const timestampStr = parts[4].split('.')[0];
+          const timestamp = Number(timestampStr);
+
+          const user = {
+            email: cleanEmail,
+            name: cleanName,
+            timestamp,
+          };
+
+          if (type === 'online' && now - timestamp < 20000) {
+            // Online inside 20 seconds
+            onlineUsers.push(user);
+          } else if (type === 'typing' && now - timestamp < 7000) {
+            // Typing inside 7 seconds
+            typingUsers.push(user);
+          }
+        }
+      });
+    }
+
+    return { onlineUsers, typingUsers };
+  } catch (err) {
+    console.error('Error fetching live presence statuses:', err);
+    return { onlineUsers: [], typingUsers: [] };
+  }
 }

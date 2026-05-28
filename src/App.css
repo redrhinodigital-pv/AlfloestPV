@@ -987,3 +987,104 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* Quoted Replies Styling */
+.msg-reply-quote-box {
+  background: rgba(168, 85, 247, 0.08);
+  border-left: 3px solid var(--primary-neon-bright);
+  padding: 6px 12px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+  max-width: 100%;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+.msg-reply-quote-box:hover {
+  background: rgba(168, 85, 247, 0.15);
+}
+.msg-reply-quote-sender {
+  font-weight: 700;
+  color: var(--primary-neon-bright);
+  display: block;
+  margin-bottom: 2px;
+}
+.msg-reply-quote-text {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+
+/* Hover Quick Actions Menu */
+.msg-bubble-container-relative {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.message-row.sent .msg-bubble-container-relative {
+  flex-direction: row-reverse;
+}
+.msg-hover-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease-in-out;
+  flex-shrink: 0;
+}
+.msg-bubble-container-relative:hover .msg-hover-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.hover-action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border-neon);
+  background: rgba(15, 10, 30, 0.9);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+.hover-action-btn:hover {
+  border-color: var(--border-neon-active);
+  color: var(--primary-neon-bright);
+  transform: scale(1.1);
+}
+
+/* Grouped Message Layout tweaks */
+.message-row.grouped {
+  margin-top: 2px;
+}
+.message-row.grouped .msg-bubble {
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+}
+
+/* Optimistic sending and warnings */
+.msg-status-sending {
+  font-size: 0.65rem;
+  color: var(--primary-neon-bright);
+  animation: pulseSync 1s infinite ease-in-out;
+}
+.msg-status-failed {
+  font-size: 0.65rem;
+  color: #ef4444;
+  font-weight: 600;
+}
+
+/* Glow Highlight scroll anchors */
+.glow-highlight .msg-bubble {
+  animation: glowBubble 1.5s ease-in-out;
+}
+@keyframes glowBubble {
+  0%, 100% { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15); }
+  50% { box-shadow: 0 0 15px var(--primary-neon-bright); border-color: var(--primary-neon-bright); }
+}
+
