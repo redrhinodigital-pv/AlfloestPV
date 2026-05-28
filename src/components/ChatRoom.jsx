@@ -4,7 +4,11 @@ import MessageBubble from './MessageBubble';
 import UploadPreview from './UploadPreview';
 import { getCachedMessages, cacheMessages } from '../dbHelper';
 import {
-  listMessages,
+  downloadMessages,
+  fetchFileMetadata,
+  updateMessagesJson,
+  mergeMessages,
+  compressImage,
   uploadTextMessage,
   uploadBinaryFile,
   uploadMediaMessage,
@@ -17,6 +21,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [connectionState, setConnectionState] = useState('Connecting...');
   
   // Parallel uploads queue
   const [uploadQueue, setUploadQueue] = useState([]);
@@ -42,9 +47,20 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
   // Throttle helper to avoid spamming typing updates
   const lastTypingTime = useRef(0);
 
-  // Refs for tracking loaded message files and delta names
-  const loadedMessageFileIds = useRef(new Set());
-  const lastMessageName = useRef(null);
+  // Refs for tracking sync modified times
+  const lastModifiedTime = useRef(null);
+
+  // Browser online state listeners
+  useEffect(() => {
+    const handleOnline = () => setConnectionState('Reconnecting...');
+    const handleOffline = () => setConnectionState('Offline cache mode');
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // 1. Initial Load: Load local messages instantly from IndexedDB cache
   useEffect(() => {
@@ -53,16 +69,6 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
       try {
         const cached = await getCachedMessages(roomDetails.roomFolderId);
         if (active && cached.length > 0) {
-          cached.forEach((msg) => {
-            if (msg.gdriveFileId) {
-              loadedMessageFileIds.current.add(msg.gdriveFileId);
-            }
-          });
-          // Track latest message filename for delta sync
-          const lastMsg = cached[cached.length - 1];
-          if (lastMsg.gdriveFileName) {
-            lastMessageName.current = lastMsg.gdriveFileName;
-          }
           setMessages(cached);
           setTimeout(() => scrollToBottom('auto'), 50);
           isInitialLoad.current = false;
@@ -78,7 +84,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
     };
   }, [roomDetails]);
 
-  // 2. Core Messaging & Delta Sync Polling Loop
+  // 2. Core Messaging & Direct Sync Polling Loop (Smart Sync Engine)
   useEffect(() => {
     let active = true;
     let pollInterval = null;
@@ -86,54 +92,52 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
     const syncMessagesAndPresence = async () => {
       if (isSyncing) return;
       setIsSyncing(true);
+
+      // Transition to syncing
+      setConnectionState(prev => (prev === 'Offline cache mode' ? prev : 'Syncing...'));
+
       try {
-        // Delta sync list messages
-        const newMsgs = await listMessages(
-          token,
-          roomDetails.folderIds.messages,
-          loadedMessageFileIds.current,
-          lastMessageName.current
-        );
+        // Step 1: Lightweight check of modifiedTime of messages.json file
+        const metadata = await fetchFileMetadata(token, roomDetails.messagesFileId);
+        
+        // Step 2: Only download and parse if modifiedTime actually changed
+        const hasModifiedTimeChanged = lastModifiedTime.current !== metadata.modifiedTime;
+        
+        let currentMessagesList = messages;
+
+        if (hasModifiedTimeChanged) {
+          console.log(`[Smart Sync] messages.json changed (Old: ${lastModifiedTime.current}, New: ${metadata.modifiedTime}). Syncing...`);
+          
+          const downloaded = await downloadMessages(token, roomDetails.messagesFileId);
+          const merged = mergeMessages(messages, downloaded);
+
+          // Write updated set to local IndexedDB instantly
+          await cacheMessages(roomDetails.roomFolderId, merged);
+
+          currentMessagesList = merged;
+          lastModifiedTime.current = metadata.modifiedTime;
+
+          if (active) {
+            setMessages(merged);
+            
+            if (isInitialLoad.current) {
+              setTimeout(() => scrollToBottom('auto'), 50);
+              isInitialLoad.current = false;
+            } else {
+              const scroller = scrollerRef.current;
+              const shouldScroll = scroller
+                ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
+                : true;
+              if (shouldScroll) {
+                setTimeout(() => scrollToBottom('smooth'), 100);
+              }
+            }
+          }
+        } else {
+          console.log('[Smart Sync] messages.json unchanged. Skipping download.');
+        }
 
         if (!active) return;
-
-        // Process new messages
-        if (newMsgs.length > 0) {
-          // Add to tracked lists
-          newMsgs.forEach((msg) => {
-            if (msg.gdriveFileId) {
-              loadedMessageFileIds.current.add(msg.gdriveFileId);
-            }
-          });
-          const lastMsg = newMsgs[newMsgs.length - 1];
-          if (lastMsg.gdriveFileName) {
-            lastMessageName.current = lastMsg.gdriveFileName;
-          }
-
-          // Cache new messages in IndexedDB local database
-          await cacheMessages(roomDetails.roomFolderId, newMsgs);
-
-          // Scroll settings
-          const scroller = scrollerRef.current;
-          const shouldScroll = scroller
-            ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
-            : true;
-
-          setMessages((prev) => {
-            // Filter out any optimistic/duplicate temporary sending messages
-            const filteredPrev = prev.filter(m => !m.sending);
-            const combined = [...filteredPrev, ...newMsgs];
-            combined.sort((a, b) => a.timestamp - b.timestamp);
-            return combined;
-          });
-
-          if (isInitialLoad.current || shouldScroll) {
-            setTimeout(() => scrollToBottom('smooth'), 100);
-            isInitialLoad.current = false;
-          }
-        } else if (isInitialLoad.current) {
-          isInitialLoad.current = false;
-        }
 
         // Poll serverless presence signaling files
         const { onlineUsers, typingUsers: activeTypers } = await listLiveStatuses(
@@ -142,14 +146,16 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
         );
 
         if (active) {
-          // Filter out our own presence
           const cleanEmail = userProfile.email.replace(/[^a-zA-Z0-9]/g, '_');
-          
           setOnlineParticipants(onlineUsers.filter(u => u.email !== cleanEmail));
           setTypingUsers(activeTypers.filter(u => u.email !== cleanEmail));
+          setConnectionState('Connected');
         }
       } catch (err) {
-        console.error('Sync execution failed:', err);
+        console.error('[Smart Sync] Sync execution failed:', err);
+        if (active) {
+          setConnectionState('Offline cache mode');
+        }
       } finally {
         if (active) {
           setIsSyncing(false);
@@ -157,17 +163,17 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
       }
     };
 
-    // Trigger immediately
+    // Trigger instantly
     syncMessagesAndPresence();
 
-    // Start 3-second polling interval
-    pollInterval = setInterval(syncMessagesAndPresence, 3000);
+    // Start high-performance 2-second polling loop
+    pollInterval = setInterval(syncMessagesAndPresence, 2000);
 
     return () => {
       active = false;
       clearInterval(pollInterval);
     };
-  }, [token, roomDetails, userProfile]);
+  }, [token, roomDetails, userProfile, messages]);
 
   // 3. Online presence heartbeats (once every 12 seconds)
   useEffect(() => {
@@ -252,26 +258,28 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
     setTimeout(() => scrollToBottom('smooth'), 50);
 
     // Clear quote target
-    const currentReplyTarget = replyTarget;
     setReplyTarget(null);
 
     try {
-      // Background Drive upload
+      setConnectionState('Uploading...');
+      // Direct update of messages.json
       await uploadTextMessage(
         token,
-        roomDetails.folderIds.messages,
+        roomDetails.messagesFileId,
         userProfile,
         textToSend
       );
 
       // Force immediate poll to fetch and sync the completed message
-      triggerImmediateSync();
+      await triggerImmediateSync();
+      setConnectionState('Connected');
     } catch (err) {
       console.error(err);
       // Mark optimistic message as failed
       setMessages(prev =>
         prev.map(m => (m.id === tempId ? { ...m, sending: false, failed: true } : m))
       );
+      setConnectionState('Offline cache mode');
     } finally {
       setIsSending(false);
     }
@@ -279,40 +287,20 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
 
   const triggerImmediateSync = async () => {
     try {
-      const newMsgs = await listMessages(
-        token,
-        roomDetails.folderIds.messages,
-        loadedMessageFileIds.current,
-        lastMessageName.current
-      );
-      if (newMsgs.length > 0) {
-        newMsgs.forEach((msg) => {
-          if (msg.gdriveFileId) {
-            loadedMessageFileIds.current.add(msg.gdriveFileId);
-          }
-        });
-        const lastMsg = newMsgs[newMsgs.length - 1];
-        if (lastMsg.gdriveFileName) {
-          lastMessageName.current = lastMsg.gdriveFileName;
-        }
-
-        // Cache locally
-        await cacheMessages(roomDetails.roomFolderId, newMsgs);
-
-        setMessages((prev) => {
-          const filtered = prev.filter(m => !m.sending);
-          const combined = [...filtered, ...newMsgs];
-          combined.sort((a, b) => a.timestamp - b.timestamp);
-          return combined;
-        });
-        setTimeout(() => scrollToBottom('smooth'), 100);
-      }
+      const metadata = await fetchFileMetadata(token, roomDetails.messagesFileId);
+      const downloaded = await downloadMessages(token, roomDetails.messagesFileId);
+      const merged = mergeMessages(messages, downloaded);
+      await cacheMessages(roomDetails.roomFolderId, merged);
+      
+      lastModifiedTime.current = metadata.modifiedTime;
+      setMessages(merged);
+      setTimeout(() => scrollToBottom('smooth'), 50);
     } catch (e) {
-      console.error(e);
+      console.error('[Sync] Immediate sync failed:', e);
     }
   };
 
-  // 6. Staged File Upload Processing (Parallel uploads)
+  // 6. Staged File Upload Processing (Parallel uploads with image compression)
   const processUploadQueue = async (newQueueItems) => {
     // Process items in parallel
     const uploadPromises = newQueueItems.map(async (item) => {
@@ -322,9 +310,22 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
       );
 
       try {
+        setConnectionState('Uploading...');
+
+        let fileToUpload = item.file;
+        if (item.file.type.startsWith('image/')) {
+          console.log(`[High Speed Upload] Compressing image: ${item.file.name}...`);
+          try {
+            fileToUpload = await compressImage(item.file);
+            console.log(`[High Speed Upload] Image compressed: ${(item.file.size / 1024).toFixed(1)}KB to ${(fileToUpload.size / 1024).toFixed(1)}KB`);
+          } catch (compressErr) {
+            console.warn('Image compression failed, uploading raw image:', compressErr);
+          }
+        }
+
         let mediaType = 'file';
-        if (item.file.type.startsWith('image/')) mediaType = 'image';
-        if (item.file.type.startsWith('video/')) mediaType = 'video';
+        if (fileToUpload.type.startsWith('image/')) mediaType = 'image';
+        if (fileToUpload.type.startsWith('video/')) mediaType = 'video';
 
         let targetFolderId = roomDetails.folderIds.files;
         if (mediaType === 'image') targetFolderId = roomDetails.folderIds.images;
@@ -334,7 +335,7 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
         const uploadResult = await uploadBinaryFile(
           token,
           targetFolderId,
-          item.file,
+          fileToUpload,
           (percent) => {
             setUploadQueue((prev) =>
               prev.map((q) => (q.id === item.id ? { ...q, progress: percent } : q))
@@ -342,14 +343,14 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
           }
         );
 
-        // Upload media JSON referencing the file
+        // Upload media JSON referencing the file directly inside messages.json
         await uploadMediaMessage(
           token,
-          roomDetails.folderIds.messages,
+          roomDetails.messagesFileId,
           userProfile,
           mediaType,
           uploadResult.fileId,
-          item.file.name
+          fileToUpload.name
         );
 
         // Mark complete
@@ -367,11 +368,13 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
         setUploadQueue((prev) =>
           prev.map((q) => (q.id === item.id ? { ...q, status: 'failed' } : q))
         );
+        setConnectionState('Offline cache mode');
       }
     });
 
     await Promise.all(uploadPromises);
-    triggerImmediateSync();
+    await triggerImmediateSync();
+    setConnectionState('Connected');
   };
 
   const handleFilesAdded = (filesList) => {
@@ -543,8 +546,8 @@ export default function ChatRoom({ roomDetails, userProfile, token, onExitRoom }
                 {roomDetails.roomName}
               </h3>
               <div className="sync-status">
-                <span className={`sync-dot ${isSyncing ? 'syncing' : ''}`}></span>
-                {isSyncing ? 'Syncing...' : 'Connected'}
+                <span className={`sync-dot ${connectionState.toLowerCase().replace(/\s/g, '-')}`}></span>
+                {connectionState}
               </div>
             </div>
           </div>

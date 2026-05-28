@@ -622,12 +622,25 @@ body {
   height: 6px;
   border-radius: 50%;
   background: #22c55e;
+  transition: background 0.3s ease;
+}
+.sync-dot.connected {
+  background: #22c55e;
 }
 .sync-dot.syncing {
   background: var(--primary-neon-bright);
   animation: pulseSync 1.2s infinite ease-in-out;
 }
-.sync-dot.offline {
+.sync-dot.connecting,
+.sync-dot.reconnecting {
+  background: #f59e0b;
+  animation: pulseSync 1s infinite ease-in-out;
+}
+.sync-dot.uploading {
+  background: #06b6d4;
+  animation: pulseSync 0.8s infinite ease-in-out;
+}
+.sync-dot.offline-cache-mode {
   background: #ef4444;
 }
 
@@ -639,6 +652,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  scroll-behavior: smooth;
+  overflow-anchor: auto;
 }
 .no-messages-prompt {
   margin: auto;

@@ -169,6 +169,7 @@ async function createFolderDirectly(name, parentId, token) {
 }
 
 /**
+ * /**
  * Create a new Room with subfolders and room_meta.json
  */
 export async function createRoom(token, roomName, creatorProfile) {
@@ -196,12 +197,13 @@ export async function createRoom(token, roomName, creatorProfile) {
     throw new Error(`Failed to set public permissions on room folder: ${err.message}`);
   }
 
-  // 4. Create subfolders and FORCE public file access sequentially
-  console.log('[Room Creation] Creating and sharing messages subfolder...');
-  const messagesFolderId = await createFolderDirectly('messages', roomFolderId, token);
-  const messagesPerm = await setPublicPermissions(token, messagesFolderId);
-  console.log('[Room Creation] Messages folder permission result:', messagesPerm);
+  // 4. Create single messages.json file and share it publicly
+  console.log('[Room Creation] Creating and sharing messages.json file...');
+  const messagesFileId = await writeJsonFile(token, roomFolderId, 'messages.json', []);
+  const messagesPerm = await setPublicPermissions(token, messagesFileId);
+  console.log('[Room Creation] messages.json permission result:', messagesPerm);
 
+  // 5. Create media subfolders sequentially and share them
   console.log('[Room Creation] Creating and sharing images subfolder...');
   const imagesFolderId = await createFolderDirectly('images', roomFolderId, token);
   const imagesPerm = await setPublicPermissions(token, imagesFolderId);
@@ -217,11 +219,12 @@ export async function createRoom(token, roomName, creatorProfile) {
   const filesPerm = await setPublicPermissions(token, filesFolderId);
   console.log('[Room Creation] Files folder permission result:', filesPerm);
 
-  // 5. Create room_meta.json structure
+  // 6. Create room_meta.json structure containing all direct file and folder IDs
   const metadata = {
-    roomId: roomFolderId, // Use raw folder ID as room ID strictly!
-    roomFolderId: roomFolderId, // Strictly raw folder ID
+    roomId: roomFolderId,
+    roomFolderId: roomFolderId,
     roomName: cleanRoomName,
+    messagesFileId: messagesFileId, // Direct ID source of truth!
     creator: {
       name: creatorProfile.name,
       email: creatorProfile.email,
@@ -229,7 +232,6 @@ export async function createRoom(token, roomName, creatorProfile) {
     },
     createdAt: Date.now(),
     folderIds: {
-      messages: messagesFolderId,
       images: imagesFolderId,
       videos: videosFolderId,
       files: filesFolderId,
@@ -271,7 +273,7 @@ export async function createRoom(token, roomName, creatorProfile) {
         const downloadUrl = `${DRIVE_API_BASE}/files/${metaFileId}?alt=media`;
         const downloadRes = await driveFetch(downloadUrl, token);
         const testMeta = await downloadRes.json();
-        const contentValid = testMeta.roomFolderId === roomFolderId && testMeta.folderIds?.messages;
+        const contentValid = testMeta.roomFolderId === roomFolderId && testMeta.messagesFileId === messagesFileId;
 
         console.log(`[Room Creation] Verification Attempt ${attempt} results: FolderShared=${folderShared}, MetaShared=${metaShared}, ContentValid=${contentValid}`);
 
@@ -295,6 +297,7 @@ export async function createRoom(token, roomName, creatorProfile) {
   return {
     roomFolderId,
     roomName: metadata.roomName,
+    messagesFileId: metadata.messagesFileId,
     folderIds: metadata.folderIds,
     creator: metadata.creator,
   };
@@ -439,21 +442,57 @@ export async function joinRoom(token, inputRoomId, onAttempt) {
   return {
     roomFolderId: roomFolderId, // ONLY use raw folder ID
     roomName: roomMeta.roomName,
+    messagesFileId: roomMeta.messagesFileId, // Expose messagesFileId directly!
     folderIds: roomMeta.folderIds,
     creator: roomMeta.creator,
   };
 }
 
 /**
+ * Directly downloads the messages.json array by File ID
+ */
+export async function downloadMessages(token, messagesFileId) {
+  const downloadUrl = `${DRIVE_API_BASE}/files/${messagesFileId}?alt=media`;
+  try {
+    const res = await driveFetch(downloadUrl, token);
+    return await res.json();
+  } catch (err) {
+    console.error('[googleDriveHelper] Failed to download messages.json:', err);
+    return [];
+  }
+}
+
+/**
+ * Direct file metadata retrieval (for modifiedTime checks)
+ */
+export async function fetchFileMetadata(token, fileId) {
+  const url = `${DRIVE_API_BASE}/files/${fileId}?fields=modifiedTime,name,size`;
+  const res = await driveFetch(url, token);
+  return await res.json();
+}
+
+/**
+ * Write/Overwrite the messages.json file directly
+ */
+export async function updateMessagesJson(token, messagesFileId, messagesList) {
+  const url = `${DRIVE_UPLOAD_BASE}/files/${messagesFileId}?uploadType=media`;
+  const res = await driveFetch(url, token, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(messagesList),
+  });
+  return await res.json();
+}
+
+/**
  * Upload a text message JSON
  */
-export async function uploadTextMessage(token, messagesFolderId, sender, text) {
+export async function uploadTextMessage(token, messagesFileId, sender, text) {
   const timestamp = Date.now();
-  const randomStr = Math.random().toString(36).substring(2, 7);
-  const filename = `${timestamp}_${randomStr}.json`;
+  const uuid = `msg_${timestamp}_${Math.random().toString(36).substring(2, 7)}`;
 
-  const messagePayload = {
-    id: `msg_${timestamp}_${randomStr}`,
+  const newMessage = {
+    id: uuid,
     sender: {
       name: sender.name,
       email: sender.email,
@@ -464,7 +503,10 @@ export async function uploadTextMessage(token, messagesFolderId, sender, text) {
     timestamp,
   };
 
-  return await writeJsonFile(token, messagesFolderId, filename, messagePayload);
+  const currentMessages = await downloadMessages(token, messagesFileId);
+  const merged = mergeMessages(currentMessages, [newMessage]);
+  await updateMessagesJson(token, messagesFileId, merged);
+  return uuid;
 }
 
 /**
@@ -539,13 +581,12 @@ export function uploadBinaryFile(token, folderId, file, onProgress) {
 /**
  * Upload a media message JSON linking to the uploaded binary file
  */
-export async function uploadMediaMessage(token, messagesFolderId, sender, mediaType, fileId, fileName) {
+export async function uploadMediaMessage(token, messagesFileId, sender, mediaType, fileId, fileName) {
   const timestamp = Date.now();
-  const randomStr = Math.random().toString(36).substring(2, 7);
-  const filename = `${timestamp}_${randomStr}.json`;
+  const uuid = `msg_${timestamp}_${Math.random().toString(36).substring(2, 7)}`;
 
-  const messagePayload = {
-    id: `msg_${timestamp}_${randomStr}`,
+  const newMessage = {
+    id: uuid,
     sender: {
       name: sender.name,
       email: sender.email,
@@ -557,59 +598,86 @@ export async function uploadMediaMessage(token, messagesFolderId, sender, mediaT
     timestamp,
   };
 
-  return await writeJsonFile(token, messagesFolderId, filename, messagePayload);
+  const currentMessages = await downloadMessages(token, messagesFileId);
+  const merged = mergeMessages(currentMessages, [newMessage]);
+  await updateMessagesJson(token, messagesFileId, merged);
+  return uuid;
 }
 
+/**
+ * Helper to deduplicate and merge messages by ID
+ */
+export function mergeMessages(existingList, newList) {
+  const map = new Map();
+  if (Array.isArray(existingList)) {
+    existingList.forEach(m => {
+      if (m && m.id) map.set(m.id, m);
+    });
+  }
+  if (Array.isArray(newList)) {
+    newList.forEach(m => {
+      if (m && m.id) map.set(m.id, m);
+    });
+  }
+  const merged = Array.from(map.values());
+  merged.sort((a, b) => a.timestamp - b.timestamp);
+  return merged;
+}
 
 /**
- * List message files inside the messages folder and return parsed messages.
- * Includes optional lastMessageName to execute lexicographical delta syncing.
+ * Canvas-based client-side image compression
  */
-export async function listMessages(token, messagesFolderId, existingMessageIds = new Set(), lastMessageName = null) {
-  let query = `'${messagesFolderId}' in parents and trashed = false`;
-  if (lastMessageName) {
-    query += ` and name > '${lastMessageName}'`;
-  }
-  // Order by name so they sort naturally by the prefix timestamp
-  const listUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&orderBy=name&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)`;
-  
-  const listRes = await driveFetch(listUrl, token);
-  const listData = await listRes.json();
-
-  if (!listData.files || listData.files.length === 0) {
-    return [];
-  }
-
-  const messages = [];
-
-  // Filter out already fetched messages to save API calls
-  const newFiles = listData.files.filter(f => !existingMessageIds.has(f.id));
-
-  // Batch download new JSONs concurrently
-  const fetchPromises = newFiles.map(async (file) => {
-    try {
-      const downloadUrl = `${DRIVE_API_BASE}/files/${file.id}?alt=media`;
-      const res = await driveFetch(downloadUrl, token);
-      const msg = await res.json();
-      // Inject the Google Drive File ID representing this message JSON
-      msg.gdriveFileId = file.id;
-      msg.gdriveFileName = file.name;
-      return msg;
-    } catch (err) {
-      console.error(`Error downloading message file ${file.name}:`, err);
-      return null;
+export function compressImage(file, maxWidth = 1000, maxHeight = 1000, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      resolve(file); // Don't compress non-images
+      return;
     }
+
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      let width = img.width;
+      let height = img.height;
+
+      if (width > height) {
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+      } else {
+        if (height > maxHeight) {
+          width = Math.round((width * maxHeight) / height);
+          height = maxHeight;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            const compressedFile = new File([blob], file.name, {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            });
+            resolve(compressedFile);
+          } else {
+            resolve(file);
+          }
+        },
+        'image/jpeg',
+        quality
+      );
+    };
+    img.onerror = (err) => reject(err);
   });
-
-  const results = await Promise.all(fetchPromises);
-  results.forEach((msg) => {
-    if (msg) messages.push(msg);
-  });
-
-  // Sort by timestamp just in case
-  messages.sort((a, b) => a.timestamp - b.timestamp);
-
-  return messages;
 }
 
 /**

@@ -235,6 +235,7 @@ export default function App() {
     const historyItem = {
       roomFolderId: roomData.roomFolderId,
       roomName: roomData.roomName,
+      messagesFileId: roomData.messagesFileId,
       folderIds: roomData.folderIds,
       isCreator,
       lastVisited: Date.now(),
