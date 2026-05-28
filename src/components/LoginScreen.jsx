@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { initGoogleAuth, loginWithGoogle } from '../googleDriveHelper';
+import React, { useState } from 'react';
+import { loginWithGoogle } from '../googleDriveHelper';
 
-// Default global client ID placeholder
-const DEFAULT_CLIENT_ID = '953186837803-qfbe987178lhvmo3d23rm8t7tvd652m8.apps.googleusercontent.com'; // Fallback or developer client ID
+const DEFAULT_CLIENT_ID = '953186837803-qfbe987178lhvmo3d23rm8t7tvd652m8.apps.googleusercontent.com';
 
 export default function LoginScreen({ onLoginSuccess }) {
   const [clientId, setClientId] = useState(() => {
@@ -11,27 +10,6 @@ export default function LoginScreen({ onLoginSuccess }) {
   const [showDevSettings, setShowDevSettings] = useState(false);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-
-  useEffect(() => {
-    // If client ID is already set, initialize the GIS auth
-    if (clientId) {
-      setError(null);
-      initGoogleAuth(
-        clientId,
-        (authData) => {
-          setIsLoading(false);
-          onLoginSuccess(authData);
-        },
-        (err) => {
-          setIsLoading(false);
-          console.error('GIS Init Error:', err);
-          setError(
-            err.message || 'Google Auth Client failed to initialize. Please check your Client ID or connection.'
-          );
-        }
-      );
-    }
-  }, [clientId, onLoginSuccess]);
 
   const handleLoginClick = () => {
     setIsLoading(true);
@@ -52,7 +30,7 @@ export default function LoginScreen({ onLoginSuccess }) {
       localStorage.setItem('alfloest_client_id', newId);
       setShowDevSettings(false);
       setError(null);
-      // Reload page to re-initialize client
+      // Reload page to re-initialize client globally in App.jsx
       window.location.reload();
     }
   };
@@ -150,7 +128,10 @@ export default function LoginScreen({ onLoginSuccess }) {
             marginTop: '10px',
             lineHeight: '1.4'
           }}>
-            * When developing locally, ensure the redirect origin in your Google Developer Console is set to <code>http://localhost:5173</code>.
+            * Ensure the Authorized JavaScript origins in your Google Developer Console contain:
+            <br />• <code>http://localhost:5173</code>
+            <br />• <code>http://localhost:5174</code>
+            <br />• <code>https://alfloest-pv.vercel.app</code>
           </div>
         </form>
       )}

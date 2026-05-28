@@ -27,7 +27,7 @@ export function initGoogleAuth(clientId, onTokenReceived, onError) {
   try {
     tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
+      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
       callback: (response) => {
         if (response.error) {
           onError(response);
@@ -54,6 +54,16 @@ export function loginWithGoogle() {
     throw new Error('Google Auth not initialized. Call initGoogleAuth first.');
   }
   tokenClient.requestAccessToken({ prompt: 'consent' });
+}
+
+/**
+ * Trigger the silent background Google OAuth login flow (no popups)
+ */
+export function loginSilentlyWithGoogle() {
+  if (!tokenClient) {
+    throw new Error('Google Auth not initialized. Call initGoogleAuth first.');
+  }
+  tokenClient.requestAccessToken({ prompt: '' });
 }
 
 /**

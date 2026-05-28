@@ -1,16 +1,29 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 import LoginScreen from './components/LoginScreen';
 import Dashboard from './components/Dashboard';
 import CreateRoomModal from './components/CreateRoomModal';
 import JoinRoomModal from './components/JoinRoomModal';
 import ChatRoom from './components/ChatRoom';
-import { getUserProfile, createRoom, joinRoom } from './googleDriveHelper';
+import {
+  getUserProfile,
+  createRoom,
+  joinRoom,
+  initGoogleAuth,
+  loginSilentlyWithGoogle,
+} from './googleDriveHelper';
+
+const DEFAULT_CLIENT_ID = '953186837803-qfbe987178lhvmo3d23rm8t7tvd652m8.apps.googleusercontent.com';
 
 export default function App() {
+  const [clientId] = useState(() => {
+    return localStorage.getItem('alfloest_client_id') || DEFAULT_CLIENT_ID;
+  });
+
   const [authState, setAuthState] = useState(() => {
-    const cachedToken = sessionStorage.getItem('alfloest_token');
-    const cachedExpires = sessionStorage.getItem('alfloest_token_expires');
+    // Try to load cached token if still valid
+    const cachedToken = localStorage.getItem('alfloest_token');
+    const cachedExpires = localStorage.getItem('alfloest_token_expires');
 
     if (cachedToken && cachedExpires) {
       if (Date.now() < Number(cachedExpires)) {
@@ -23,7 +36,11 @@ export default function App() {
     return null;
   });
 
-  const [userProfile, setUserProfile] = useState(null);
+  const [userProfile, setUserProfile] = useState(() => {
+    const cachedProfile = localStorage.getItem('alfloest_profile');
+    return cachedProfile ? JSON.parse(cachedProfile) : null;
+  });
+
   const [activeRoom, setActiveRoom] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [globalError, setGlobalError] = useState(null);
@@ -32,14 +49,64 @@ export default function App() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isJoinOpen, setIsJoinOpen] = useState(false);
 
+  // Global GIS Initialization and Silent Auto-Login
+  useEffect(() => {
+    let active = true;
+
+    const checkAndInit = () => {
+      if (!active) return;
+
+      if (window.google?.accounts?.oauth2) {
+        initGoogleAuth(
+          clientId,
+          (authData) => {
+            if (!active) return;
+            handleLoginSuccess(authData);
+          },
+          (err) => {
+            if (!active) return;
+            console.error('GIS Error:', err);
+            setIsLoading(false);
+            // If silent login fails (profile expired/revoked), clear logged in flag
+            localStorage.removeItem('alfloest_logged_in');
+          }
+        );
+
+        // If logged in flag is true, trigger silent auto-login!
+        if (localStorage.getItem('alfloest_logged_in') === 'true' && !authState?.accessToken) {
+          setIsLoading(true);
+          try {
+            setTimeout(() => {
+              if (active) loginSilentlyWithGoogle();
+            }, 100);
+          } catch (e) {
+            console.error('Silent auto-auth execution failed:', e);
+            setIsLoading(false);
+            localStorage.removeItem('alfloest_logged_in');
+          }
+        }
+      } else {
+        // Retry in 100ms
+        setTimeout(checkAndInit, 100);
+      }
+    };
+
+    checkAndInit();
+
+    return () => {
+      active = false;
+    };
+  }, [clientId]);
+
   // Load profile when authState changes
   useEffect(() => {
-    if (authState?.accessToken) {
+    if (authState?.accessToken && !userProfile) {
       setIsLoading(true);
       setGlobalError(null);
       getUserProfile(authState.accessToken)
         .then((profile) => {
           setUserProfile(profile);
+          localStorage.setItem('alfloest_profile', JSON.stringify(profile));
           setIsLoading(false);
         })
         .catch((err) => {
@@ -48,10 +115,8 @@ export default function App() {
           handleLogout();
           setIsLoading(false);
         });
-    } else {
-      setUserProfile(null);
     }
-  }, [authState]);
+  }, [authState, userProfile]);
 
   // Deep-linking / URL Invite Joiner Effect
   useEffect(() => {
@@ -80,16 +145,20 @@ export default function App() {
 
   const handleLoginSuccess = (authData) => {
     setAuthState(authData);
-    sessionStorage.setItem('alfloest_token', authData.accessToken);
-    sessionStorage.setItem('alfloest_token_expires', authData.expiresAt.toString());
+    localStorage.setItem('alfloest_token', authData.accessToken);
+    localStorage.setItem('alfloest_token_expires', authData.expiresAt.toString());
+    localStorage.setItem('alfloest_logged_in', 'true');
+    setIsLoading(false);
   };
 
   const handleLogout = () => {
     setAuthState(null);
     setUserProfile(null);
     setActiveRoom(null);
-    sessionStorage.removeItem('alfloest_token');
-    sessionStorage.removeItem('alfloest_token_expires');
+    localStorage.removeItem('alfloest_token');
+    localStorage.removeItem('alfloest_token_expires');
+    localStorage.removeItem('alfloest_profile');
+    localStorage.removeItem('alfloest_logged_in');
   };
 
   const handleCreateRoom = async (roomName) => {
